@@ -1,0 +1,844 @@
+---
+title: "Group project"
+author: "Zongrui Dai"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+###############################################################################################
+#                           Zongrui Dai - Imputation & GLH                                    #
+###############################################################################################
+## Input the data and do imputation
+# Data input
+```{r}
+library(xlsx)
+# library(readxl)
+library(ggplot2)
+library(ggstatsplot)
+library(nnet)
+library(MASS)
+library(lmtest)
+library(sandwich)
+library(dplyr)
+setwd('D:/BIOSTAT 650/Group project/')
+```
+
+## Input data
+```{r}
+data<-read.xlsx('Depression Data.xls',header=T,sheetName = 'dep')
+# data <- read_excel("Depression Data.xls")
+str(data)
+```
+
+```{r}
+df1<-data.frame(
+  Grade = data$GRADE,
+  USborn = data$USBORN,
+  Age = data$AGE4,
+  Marstat = data$MARSTAT4,
+  Khyper41 = data$KHYPER41,
+  Mdiab41 = data$MDIAB41,
+  Totmmse4 = data$TOTMMSE4,
+  Cesdtot4 = data$CESDTOT4,
+  Totiadl4 = data$TOTIADL4,
+  EE46 = data$EE46,
+  OO49lang = data$OO49LANG,
+  Sex = data$MALE,
+  U43s = data$U43S,
+  Totadl4 = data$TOTADL4,
+  NKIDS4 = data$NKIDS4,
+  HEALTH4 = data$HEALTH4,
+  NFRAC41 = data$NFRAC41,
+  #CC43 = data$CC43,
+  HHA4 = data$HHA4
+)
+
+#l1<-lm(Cesdtot4~.,na.omit(df1))
+#l2<-lm(Cesdtot4~.,na.omit(df))
+#anova(l1,l2)
+
+NA_Count<-c()
+for(i in length(df1[,1])){
+  NA_Count<-c(NA_Count,sum(is.na(df1[i,])))
+}
+colSums(is.na(df1)) # CC43 and HHA4 have a lot of missingness
+```
+
+## Only imputate the variables that we are interested. Remove NKIDS4, NFRAC41, hha4, CC43
+```{r}
+df2<-data.frame(
+  Grade = data$GRADE,
+  USborn = data$USBORN,
+  Age = data$AGE4,
+  Marstat = data$MARSTAT4,
+  Khyper41 = data$KHYPER41,
+  Mdiab41 = data$MDIAB41,
+  OO49lang = data$OO49LANG,
+  Totmmse4 = data$TOTMMSE4,
+  Cesdtot4 = data$CESDTOT4,
+  Totiadl4 = data$TOTIADL4,
+  EE46 = data$EE46,
+  Sex = data$MALE,
+  U43s = data$U43S,
+  Totadl4 = data$TOTADL4,
+  HEALTH4 = data$HEALTH4
+)
+
+```
+
+
+###############################################################################################
+#                                   Imputation                                                #
+###############################################################################################
+
+# Do we include all variables in imputation, or just the ones we plan to include in our analysis? I think we should only include the ones we plan to include in downstream analysis...
+
+## Review the pattern of missing value
+# First figure indicate which type of sample are likely to be missed
+# Second figure indicate that Cesdtot4,Totmmse4, and EE46 have higher propotion of missing value. While EE46 and Cesdtot4 are our interested variables. So I don't remove all of them (Include the Totmmse4, if you think it can be removed, please let me know.). 
+```{r}
+library(mice)
+miss.nu<-mice(df2, maxit=0)
+md.pattern(df2,rotate.names=TRUE) 
+fluxplot(df2)
+
+#impt<-mice(data,maxit=30, seed=20221113,print = FALSE)
+#stripplot(impt, CESDTOT4~.imp, pch=8, cex=2)
+#plot(impt)
+```
+
+## KNN imputation. Define k as 1 which can prevent the producing of unresonable values
+```{r}
+library(DMwR2)
+
+df3<-df2[,c("Grade","USborn","Age","Marstat","Khyper41","Mdiab41","OO49lang",
+"Totiadl4","Sex","U43s","Totadl4","HEALTH4")]
+
+df_knn_step1<-knnImputation(df3,k=1)
+
+Totmmse4<-knnImputation(cbind(df_knn_step1,df2$Totmmse4),k=1)[,13]
+Cesdtot4<-knnImputation(cbind(df_knn_step1,df2$Cesdtot4),k=1)[,13]
+EE46<-knnImputation(cbind(df_knn_step1,df2$EE46),k=1)[,13]
+
+df_knn<-cbind(df_knn_step1,Totmmse4,EE46,Cesdtot4)
+Totiadl<-df_knn$Totiadl4
+```
+
+###############################################################################################
+#                           Muticollinearity of Totadl4                                       #
+###############################################################################################
+## Whether the Totadl4 should be discarded
+# The VIF value of this feature indicate a weak muticollinearity. So we cannot remove it 
+```{r}
+## Based on the KNN imputation method
+# VIF shows there is no need to discard Totadl4(VIF<5)
+
+l1<-lm(Cesdtot4~.,df_knn)
+
+car::vif(l1)
+#write.csv(df_knn,'D:/BIOSTAT 650/Group project/Cleaned data.csv')
+```
+
+###############################################################################################
+#           Whether the grouping of Totadl4 and Totiadl4 can be further simplified            #
+###############################################################################################
+
+## Whether the Totiadl4 can be simplified to three groups - (0,1,2), (3,4,5,6), (7,8,9,10)
+```{r}
+ggbetweenstats(
+    data = df_knn,
+    x = Totiadl4,
+    y = Cesdtot4,
+    type = "robust",
+    pairwise.comparisons = F,
+    outlier.tagging = FALSE
+)
+```
+
+## Whether the Totadl4 can be simplified to two groups - 0, (1,7)
+```{r}
+ggbetweenstats(
+    data = df_knn,
+    x = Totadl4,
+    y = Cesdtot4,
+    type = "robust",
+    pairwise.comparisons = F,
+    outlier.tagging = FALSE
+)
+```
+
+## GLH hypothesis of Totiadl4
+```{r}
+T0<-as.numeric(df_knn$Totiadl4==0)
+T1<-as.numeric(df_knn$Totiadl4==1)
+T2<-as.numeric(df_knn$Totiadl4==2)
+T3<-as.numeric(df_knn$Totiadl4==3)
+T4<-as.numeric(df_knn$Totiadl4==4)
+T5<-as.numeric(df_knn$Totiadl4==5)
+T6<-as.numeric(df_knn$Totiadl4==6)
+T7<-as.numeric(df_knn$Totiadl4==7)
+T8<-as.numeric(df_knn$Totiadl4==8)
+T9<-as.numeric(df_knn$Totiadl4==9)
+T10<-as.numeric(df_knn$Totiadl4==10)
+
+## Taking T0 as reference coding
+dff1<-cbind(df_knn,T1,T2,T3,T4,
+           T5,T6,T7,T8,T9,T10)
+dff2<-dff1[,c(15:25)]
+l2<-lm(Cesdtot4 ~.,dff2)
+summary(l2)
+```
+
+## Totiadl4 should only be combined to three groups
+# p=1.968e-07 ***
+```{r}
+TM<-c(rep(0,1),1,rep(0,9),rep(0,1),1,-1,rep(0,8),rep(0,3),1,-1,rep(0,6),rep(0,4),1,-1,rep(0,5),rep(0,5),1,-1,rep(0,4),rep(0,7),1,-1,rep(0,2),rep(0,8),1,-1,rep(0,1),rep(0,9),1,-1)
+tm<-matrix(TM,byrow = T,ncol=11)
+print(tm)
+
+car::linearHypothesis(model=l2,hypothesis.matrix=tm,rhs=rep(0,8))
+```
+
+## GLH hypothesis of Totadl4
+```{r}
+T0<-as.numeric(df_knn$Totadl4==0)
+T1<-as.numeric(df_knn$Totadl4==1)
+T2<-as.numeric(df_knn$Totadl4==2)
+T3<-as.numeric(df_knn$Totadl4==3)
+T4<-as.numeric(df_knn$Totadl4==4)
+T5<-as.numeric(df_knn$Totadl4==5)
+T6<-as.numeric(df_knn$Totadl4==6)
+T7<-as.numeric(df_knn$Totadl4==7)
+
+
+## Taking T0 as reference coding
+df1<-cbind(df_knn,T1,T2,T3,T4,
+           T5,T6,T7)
+df2<-df1[,c(15:22)]
+l2<-lm(Cesdtot4 ~.,df2)
+summary(l2)
+```
+
+## Totadl4 cannot be further simplified 
+# p=0.3061
+```{r}
+TM<-c(rep(0,1),1,-1,rep(0,5),rep(0,2),1,-1,rep(0,4),rep(0,3),1,-1,rep(0,3),rep(0,4),1,-1,rep(0,2),rep(0,5),1,-1,rep(0,1),rep(0,6),1,-1)
+tm<-matrix(TM,byrow = T,ncol=8)
+print(tm)
+
+car::linearHypothesis(model=l2,hypothesis.matrix=tm,rhs=rep(0,6))
+```
+
+###############################################################################################
+#              Whether the grouping of other variable can be further simplified               #
+###############################################################################################
+## Reglious
+```{r}
+ggbetweenstats(
+    data = df_knn,
+    x = EE46,
+    y = Cesdtot4,
+    type = "robust",
+    pairwise.comparisons = F,
+    outlier.tagging = FALSE
+)
+```
+
+## Whether the (1,4) and (2,3) can be combined
+```{r}
+R1<-as.numeric(df_knn$EE46==1)
+R2<-as.numeric(df_knn$EE46==2)
+R3<-as.numeric(df_knn$EE46==3)
+R4<-as.numeric(df_knn$EE46==4)
+
+Cesdtot4=df_knn$Cesdtot4
+df3<-cbind(Cesdtot4,R2,R3,R4)
+df3<-as.data.frame(df3)
+l3<-lm(Cesdtot4 ~.,df3)
+summary(l3)
+```
+
+## Reglious cannot be combined to two groups
+# p=0.0791 .
+```{r}
+TM1<-c(rep(0,1),1,-1,0,rep(0,3),1)
+tm1<-matrix(TM1,byrow = T,ncol=4)
+
+car::linearHypothesis(model=l3,hypothesis.matrix=tm1,rhs=rep(0,2))
+```
+
+## Reglious can be combined to two groups (1,2) and (3,4) - Because the group4 is too small, maybe this method is more suitable
+# p=0.03493 *
+```{r}
+TM1<-c(rep(0,1),1,0,0,rep(0,2),1,-1)
+tm1<-matrix(TM1,byrow = T,ncol=4)
+
+car::linearHypothesis(model=l3,hypothesis.matrix=tm1,rhs=rep(0,2))
+```
+
+###############################################################################################
+#                                 Continuous vs categorical                                   #
+###############################################################################################
+
+## Before analysis, change Totiadl4 to three groups (0,1,2), (3,4,5,6), (7,8,9,10)
+```{r}
+## After this transfermation, it will be hard to say whether the variable is equal space. 
+# So here I using reference coding to categorize the Totiadl4, using 1 as reference. 
+Totiadl4<-df_knn$Totiadl4
+Totiadl4[Totiadl4>=0 & Totiadl4<=2] = 1
+Totiadl4[Totiadl4>=3 & Totiadl4<=6] = 2
+Totiadl4[Totiadl4>=7 & Totiadl4<=10] = 3
+
+df_knn$Totiadl4<-Totiadl4
+dummyTotiadl4 <- class.ind(Totiadl4)
+
+df_knn<-df_knn[,-8]  # remove the original Totiadl4
+df_knn<-cbind(dummyTotiadl4[,2:3],df_knn)
+colnames(df_knn)[1:2]<-c('Totiadl4_2','Totiadl4_3')
+```
+
+## Code EE46 as dummy variable
+```{r}
+EE46<-df_knn$EE46
+EE46[EE46==1 | EE46==2] = 0
+EE46[EE46==3 | EE46==4] = 1
+
+df_knn$EE46<-EE46
+```
+
+## Check whether the Totiadl4 has linear relationship with y
+```{r}
+l_Totiadl4<-lm(Cesdtot4~.,df_knn)
+summary(l_Totiadl4)
+```
+
+## The linearity is not met. Need transformation. 
+```{r}
+Totiadl1<-median(Totiadl[Totiadl>=0 & Totiadl<=2])
+Totiadl2<-median(Totiadl[Totiadl>=3 & Totiadl<=6])
+Totiadl3<-median(Totiadl[Totiadl>=7 & Totiadl<=10])
+
+Totiadl_median<-c(Totiadl1,Totiadl2,Totiadl3)
+Totiadl_beta<-c(0,2.114869,2.031358   )
+plot(Totiadl_median,Totiadl_beta,type='o')
+```
+
+## Binary variable has no need to be dummy. Here I define the variable which has 3 - 5classes as muticlass. For this kinds of variables, we can use categorical methods. Other variable with more than 5 classes are defined as continuous. 
+```{r}
+type<-c()
+for(i in 1:length(df_knn)){
+  feature<-df_knn[,i]
+  freq<-data.frame(table(feature))
+  if(length(freq[,1]) == 2){
+    type<-c(type,'binary')
+  }else if(length(freq[,1]) >=3 & length(freq[,1])<=5){
+    type<-c(type,'muticlass(3-5)')
+  }else if(length(freq[,1]) > 5){
+    type<-c(type,'continuous(>5)')
+  }
+}
+data_type<-data.frame(type,colnames(df_knn))
+print(data_type)
+```
+
+## Define the EE46 and Marstat as dummy variable. Both are taking group1 as reference group
+```{r}
+## Only EE46 and Marstat are defined as muticlasses variables
+dummyMarstat <- class.ind(df_knn$Marstat)
+dummyHealth <- class.ind(df_knn$HEALTH4)
+
+df_knn_cat<-df_knn[,c(-13,-6)]  # remove the original Totiadl4
+df_knn_cat<-cbind(dummyMarstat[,2:5],dummyHealth[,2:4],df_knn_cat)
+colnames(df_knn_cat)[1:7]<-c('Marstat_2','Marstat_3','Marstat_4','Marstat_5',
+                         'Health4_2','Health4_3','Health4_4')
+
+```
+
+## Full model definition
+```{r}
+l2<-lm(Cesdtot4~.,df_knn_cat)
+summary(l2)
+car::vif(l2)
+```
+
+## Full model definition - Not include in PPT
+```{r}
+car::Anova(l2,type='III')
+```
+
+###############################################################################################
+#                           Junxian liu - Interaction                                         #
+###############################################################################################
+## U43s has interaction with Khyper41? 
+# The interaction U43s:Khyper41 is not significant - p=0.232707 
+# But has strong mediation. Khyper41 is confounder. 
+```{r}
+## Taken Cesdtot4 as response
+l3<-lm(Cesdtot4 ~ Marstat_2 + Marstat_3 + Marstat_4 + Health4_2 + Health4_3 + Health4_4 + 
+    Totiadl4_2 + Totiadl4_3 + USborn + Grade + USborn + Age + Mdiab41 + OO49lang +
+    Sex + Totadl4 + Totmmse4 + EE46 + U43s*Khyper41, df_knn_cat)
+
+summary(l3)
+```
+
+## Although the interaction is not significant. We still can test whether there is one mediation relationship between them. 
+# The mediation is complete mediation. U43s influence the Cesdtot4 variable completely through the Khyper41.
+# Should not include both U43s and Khyper41 in our final model. While keep which one in the model is one question. Because we need to point out which is confounder: https://www.scribbr.com/methodology/confounding-variables/
+
+# https://www.sohu.com/a/429507752_120233365
+# http://www.davidakenny.net/cm/mediate.html
+# https://ademos.people.uic.edu/Chapter14.html
+
+# p=1.781041e-06, may have a strong mediation. 
+```{r}
+## My result indicate that U43s may have one directed effect on Cesdtot4. While Khyper41 may be the mediation. 
+library(multilevel)
+sobel(pred=df_knn_cat$U43s, med=df_knn_cat$Khyper41, out=df_knn_cat$Cesdtot4)
+
+## sobel test only give out the z value, so here I just compute p-value by hand
+
+print(2-2*pnorm(4.776803)) 
+#sobel(pred=Reduced_df_knn$Khyper41, med=Reduced_df_knn$U43s, out=Reduced_df_knn$Cesdtot4)
+```
+
+## U43s has to be kept while remove the Khyper41
+## Totiadl4_3 and U43s interaction 
+# The interaction between Totiadl4_3 and U43s is significant
+```{r}
+## Taken Cesdtot4 as response
+l3<-lm(Cesdtot4 ~ Marstat_2 + Marstat_3 + Marstat_4 + Health4_2 + Health4_3 + Health4_4 + 
+    Totiadl4_2 + Totiadl4_3 + USborn + Grade + USborn + Age + OO49lang + Mdiab41 +
+    Sex + Totadl4 + Totmmse4 + EE46 + U43s*Totiadl4_3, df_knn_cat)
+
+summary(l3)
+```
+###############################################################################################
+#                           Abby -  Diagnostics                                               #
+###############################################################################################
+
+```{r}
+## Define the final full model
+l4<-lm(Cesdtot4 ~ Marstat_2 + Marstat_3 + Marstat_4 + Health4_2 + Health4_3 + Health4_4 + 
+    Totiadl4_2 + Totiadl4_3 + USborn + Grade + Age + Mdiab41 + OO49lang + 
+    Sex + Totadl4 + Totmmse4 + EE46 + U43s*Totiadl4_3, df_knn_cat)
+
+# summary(l4)
+
+```
+
+```{r linearity}
+# partial regression plots
+library(car)
+par(mfrow=c(2,2))
+avPlots(l4, 'Totmmse4', cex=.3) 
+avPlots(l4, 'Totadl4', cex=.3)
+avPlots(l4, 'Grade', cex=.3)
+avPlots(l4, 'Age', cex=.3)
+# nothing too concerning; the plots look linear
+```
+ 
+```{r normality}
+## Normality test for the residuals
+resid = l4$residuals
+shapiro.test(resid) # Normality is violated - p-value<0.001
+qplot(resid, bins=20, xlab='Residuals', ylab='Frequency') + theme_classic() + theme(text=element_text(size=15))
+plot(l4, which=2) # QQ plot
+# May not be a problem given our large n, but transformation of Y might help
+```
+
+
+```{r equal variance}
+library(patchwork)
+bptest(l4) # heteroskedasticity
+#coeftest(l4, vcov = vcovHC(l4, "HC1")) # robust standard errors?
+levels = df_knn_cat$Cesdtot4
+levels[levels>6] <- 'greater than 6'
+levels = as.factor(levels)
+d<-data.frame(residuals=l4$residuals,fittedy = l4$fitted.values, y = levels)
+# colorplot colors each point by the value of CESD
+colorplot <- ggplot(d,aes(y=residuals, x=fittedy,col=factor(y)))+
+  geom_point() +
+  labs(x='Fitted values', y='Residuals', col='Depression Score') +
+  theme_classic() +
+  ylim(-50,50) + 
+  scale_color_brewer(palette='Spectral') +
+  geom_hline(yintercept=0, col='blue') +
+  theme(text=element_text(size=25), legend.position='none') 
+regplot <- ggplot(d,aes(y=residuals, x=fittedy))+
+  geom_point() +
+  labs(x='Fitted values', y='Residuals') +
+  theme_classic() +
+  ylim(-50,50) + 
+  geom_hline(yintercept=0, col='blue') +
+  theme(text=element_text(size=25))
+colorplot 
+regplot
+colorplotlegend <- ggplot(d,aes(y=residuals, x=fittedy,col=factor(y)))+
+  geom_point() +
+  labs(x='Fitted values', y='Residuals', col='Depression \nScore') +
+  theme_classic() +
+  ylim(-50,50) + 
+  scale_color_brewer(palette='Spectral') +
+  geom_hline(yintercept=0, col='blue') +
+  theme(text=element_text(size=15), legend.key.size=unit(.15, 'cm')) +
+  guides(col=guide_legend(override.aes=list(size=2)))
+colorplotlegend
+```
+
+## Variance stabilizing transformations
+
+```{r}
+first = qplot(df_knn_cat$Cesdtot4, bins=30)
+sqrt = qplot(sqrt(df_knn_cat$Cesdtot4), bins=30)
+log = qplot(log(df_knn_cat$Cesdtot4 + 1), bins=30)
+first + sqrt + log
+```
+
+
+```{r square-root transform}
+modelformula = formula(l4)
+newformula = update(modelformula, sqrt(Cesdtot4)~.)
+redmodel2 = lm(newformula, data=df_knn_cat)
+resid2 = redmodel2$residuals
+fits2 = redmodel2$fitted.values
+
+# Normality
+qplot(resid2, bins=20, xlab='Residuals', ylab='Frequency') + theme_classic() + theme(text=element_text(size=15))
+plot(redmodel2, which=2)
+shapiro.test(resid2) # still significant, but bigger p value
+
+# Equal variance
+bptest(redmodel2)
+d2 <- data.frame(resid2, fits2, y= levels)
+regplot2 <- ggplot(data=d2, aes(y=resid2, x=fits2))+
+  geom_point() +
+  labs(x='Fitted values', y='Residuals') +
+  theme_classic() +
+  ylim(-6,6) + 
+  geom_hline(yintercept=0, col='blue')
+regplot + ggtitle('No Transformation') + regplot2 + ggtitle('Square-Root Transformation')
+
+colorplot <- ggplot(d2,aes(y=resid2, x=fits2,col=factor(y)))+
+  geom_point() +
+  labs(x='Fitted values', y='Residuals', col='Depression Score') +
+  theme_classic() +
+  ylim(-6,6) + 
+  scale_color_brewer(palette='Spectral') +
+  geom_hline(yintercept=0, col='blue') +
+  theme(text=element_text(size=25), legend.position='none') 
+colorplot
+
+colorplotlegend <- ggplot(d2,aes(y=resid2, x=fits2,col=factor(y)))+
+  geom_point() +
+  labs(x='Fitted values', y='Residuals', col='Depression \nScore') +
+  theme_classic() +
+  ylim(-6,6) + 
+  scale_color_brewer(palette='Spectral') +
+  geom_hline(yintercept=0, col='blue') +
+  theme(text=element_text(size=15), legend.key.size=unit(.15, 'cm')) +
+  guides(col=guide_legend(override.aes=list(size=2)))
+colorplotlegend
+```
+
+Square-root transformation isn't perfect, but it does help.
+
+```{r log transform}
+modelformula = formula(l4)
+newformula2 = update(modelformula, log(Cesdtot4+1)~.)
+redmodel3 = lm(newformula2, data=df_knn_cat)
+resid3 = redmodel3$residuals
+fits3 = redmodel3$fitted.values
+
+# Normality 
+qplot(resid3, bins=20, xlab='Residuals', ylab='Frequency') + theme_classic()
+plot(redmodel3, which=2)
+shapiro.test(resid3) # still significant, but bigger p value
+
+# Equal variance
+d3 <- data.frame(resid3, fits3)
+regplot3 <- ggplot(data=d3, aes(y=resid3, x=fits3))+
+  geom_point() +
+  labs(x='Fitted values', y='Residuals') +
+  theme_classic() +
+  ylim(-6,6) + 
+  geom_hline(yintercept=0, col='blue')
+regplot + ggtitle('No Transformation') + regplot3 + ggtitle('Log Transformation')
+```
+Square root seems better
+
+###############################################################################################
+#                                      Outliers                                               #
+###############################################################################################
+
+## Make indicator for data with missing values
+```{r}
+testdf<-data.frame(
+  Grade = data$GRADE,
+  USborn = data$USBORN,
+  Age = data$AGE4,
+  Marstat = data$MARSTAT4,
+  Khyper41 = data$KHYPER41,
+  Mdiab41 = data$MDIAB41,
+  OO49lang = data$OO49LANG,
+  Totmmse4 = data$TOTMMSE4,
+  Cesdtot4 = data$CESDTOT4,
+  Totiadl4 = data$TOTIADL4,
+  EE46 = data$EE46,
+  Sex = data$MALE,
+  U43s = data$U43S,
+  Totadl4 = data$TOTADL4,
+  HEALTH4 = data$HEALTH4
+)
+missingindicator <- complete.cases(testdf)==F
+sum(missingindicator) 
+# True indicates that this observation has at least one missing value that has to be imputed
+```
+## Leverage
+```{r}
+
+Leverage<-hatvalues(l4)
+Average_leverage<-mean(Leverage) #.0119
+type = Leverage
+
+length(Leverage[Leverage>2*Average_leverage]) #94
+
+type[Leverage>2*Average_leverage] = 'High leverage'
+type[Leverage<=2*Average_leverage] = 'Normal'
+
+dleverage<-data.frame(Leverage,x=1:length(df_knn_cat[,1]),type=type)
+ggplot(dleverage,aes(x=x,y=Leverage))+
+  geom_point(aes(col=type))+geom_hline(aes(yintercept=2*Average_leverage,colour="Cutoff: 2*Average Leverage")) +
+  labs(x='Observation number') +
+  theme_classic() +
+  scale_color_manual(values=c('red', 'purple', 'dark green')) +
+  theme(legend.position='none', text=element_text(size=15)) 
+  
+# color points by whether they had any missing values before imputation
+ggplot(dleverage,aes(x=x,y=Leverage))+
+  geom_point(aes(col=missingindicator))+geom_hline(aes(yintercept=2*Average_leverage,colour="Cutoff: 2*Average Leverage")) +
+  geom_text(aes(0,2*Average_leverage,label = round(2*Average_leverage,4), vjust = -1)) +
+  labs(x='Observation number') +
+  theme_classic()
+```
+
+## Cook_Distance
+```{r}
+#external_residuals<-rstudent(l4)
+#Cook_Distance<-(rstandard(l4)**2/17)*(Leverage/(1-Leverage))
+Cook_Distance = cooks.distance(l4)
+type = Cook_Distance
+
+length(Cook_Distance[Cook_Distance>4/length(df_knn_cat[,1])]) #99
+
+type[Cook_Distance>4/length(df_knn_cat[,1])] = 'High influence'
+type[Cook_Distance<=4/length(df_knn_cat[,1])] = 'Normal'
+
+dcook<-data.frame(Cook_Distance,x=1:length(df_knn_cat[,1]),type)
+
+ggplot(dcook,aes(x=x,y=Cook_Distance))+
+  geom_point(aes(colour=type))+geom_hline(aes(yintercept=4/length(df_knn_cat[,1]),colour="Cutoff: 4/n")) +
+  #geom_text(aes(0,4/length(df_knn_cat[,1]),label = round(4/length(df_knn_cat[,1]),4), vjust = -1)) +
+  labs(x='Observation number', y='Cooks Distance') +
+  theme_classic() + 
+  theme(legend.position='none', text=element_text(size=15)) + 
+  ylim(0, 0.027)
+
+# color points by whether they had any missing values before imputation
+ggplot(dcook,aes(x=x,y=Cook_Distance))+
+  geom_point(aes(colour=missingindicator))+geom_hline(aes(yintercept=4/length(df_knn_cat[,1]),colour="Cutoff: 4/n")) +
+  geom_text(aes(0,4/length(df_knn_cat[,1]),label = round(4/length(df_knn_cat[,1]),4), vjust = -1)) +
+  labs(x='Observation number', y='Cooks Distance') +
+  theme_classic()
+
+# combine resid vs fits with Cook's distance
+resid_cooks <- ggplot(d,aes(y=residuals, x=fittedy,col=factor(y)))+
+  geom_point(aes(size=Cook_Distance)) +
+  labs(x='Fitted values', y='Residuals', col='Depression \nScore', size='Cook\'s \nDistance') +
+  theme_classic() +
+  ylim(-50,50) + 
+  scale_color_brewer(palette='Spectral') +
+  geom_hline(yintercept=0, col='blue') +
+  theme(text=element_text(size=15), legend.key.size=unit(.15, 'cm')) +
+  guides(col=guide_legend(override.aes=list(size=2))) +
+  scale_size(limits=c(0,.03), range=c(1,4))
+resid_cooks
+```
+## Some of our imputed values are included in the high leverage/ high outliers
+
+# High proportion of outliers making it impossible to remove all of them. - Using robust regression. 
+
+```{r}
+# Investigating how many outliers were imputed
+
+dinfluence<-data.frame(
+  leverage = dleverage$type,
+  cook = dcook$type,
+  missingindicator
+)
+totn = dinfluence %>% group_by(leverage, cook) %>% count()
+dinfluence %>% left_join(totn) %>% group_by(leverage, cook, missingindicator, n) %>% count(missingindicator) %>% mutate(prop=nn/n)
+
+# some of our outliers were imputed, but not all
+```
+
+```{r covratio}
+covratio = covratio(l4)
+cutoff = 1+(3*20/nrow(data)) # adjust p as necessary
+cutoff2 = 1-(3*20/nrow(data))
+sum(covratio > cutoff) # 56 points that increase precision 
+sum(covratio < cutoff2) # 73 points that decrease precision 
+# df_knn_cat %>% filter(covratio > cutoff) 
+cov_df <- df_knn_cat %>% filter(covratio < cutoff2) %>% dplyr::select(Cesdtot4) # looks like the large residual (decrease precision) points all have depression... kind of interesting, not too surprising. I guess our model doesn't do super well at modelling moderate-severe depression. 
+ggplot()+
+  geom_histogram(data=df_knn_cat, aes(x=Cesdtot4, fill='COVRATIO > 0.96'), bins=20) +
+  geom_histogram(data=cov_df, aes(x=Cesdtot4, fill='COVRATIO < 0.96'), bins=20) +
+  labs(x='Depression score', y='Frequency', fill='COVRATIO') +
+  theme_classic() +
+  theme(text=element_text(size=15)) +
+  scale_fill_discrete(type=c('magenta', 'grey'))
+```
+
+## Leverage- squareroot transform -- doesn't change; this makes sense since our design matrix isn't changing
+```{r}
+Leverage2<-hatvalues(redmodel2)
+Average_leverage2<-mean(Leverage2)
+
+length(Leverage2[Leverage2>2*Average_leverage2])
+all.equal(Leverage, Leverage2)
+
+```
+
+## Cook_Distance- squareroot transform
+```{r}
+Cook_Distance = cooks.distance(redmodel2)
+type = Cook_Distance
+
+length(Cook_Distance[Cook_Distance>4/length(df_knn_cat[,1])]) # 91
+
+type[Cook_Distance>4/length(df_knn_cat[,1])] = 'High influence'
+type[Cook_Distance<=4/length(df_knn_cat[,1])] = 'Normal'
+
+dcook<-data.frame(Cook_Distance,x=1:length(df_knn_cat[,1]),type)
+
+ggplot(dcook,aes(x=x,y=Cook_Distance))+
+  geom_point(aes(colour=type))+geom_hline(aes(yintercept=4/length(df_knn_cat[,1]),colour="Cutoff: 4/n")) +
+  #geom_text(aes(0,4/length(df_knn_cat[,1]),label = round(4/length(df_knn_cat[,1]),4), vjust = -1)) +
+  labs(x='Observation number', y='Cooks Distance') +
+  theme_classic() + 
+  theme(legend.position='none', text=element_text(size=15)) +
+  ylim(0, .027)
+
+# color by whether the points had any missing values before imputation
+ggplot(dcook,aes(x=x,y=Cook_Distance))+
+  geom_point(aes(colour=missingindicator))+geom_hline(aes(yintercept=4/length(df_knn_cat[,1]),colour="Cutoff: 4/n")) +
+  geom_text(aes(0,4/length(df_knn_cat[,1]),label = round(4/length(df_knn_cat[,1]),4), vjust = -1)) +
+  labs(x='Observation number', y='Cooks Distance') +
+  theme_classic()
+
+# combine residual vs fits plot with cooks distance
+resid_cooks <- ggplot(d2,aes(y=resid2, x=fits2,col=factor(y)))+
+  geom_point(aes(size=Cook_Distance)) +
+  labs(x='Fitted values', y='Residuals', col='Depression \nScore', size='Cook\'s \nDistance') +
+  theme_classic() +
+  ylim(-6,6) + 
+  scale_color_brewer(palette='Spectral') +
+  geom_hline(yintercept=0, col='blue') +
+  theme(text=element_text(size=15), legend.key.size=unit(.15, 'cm')) +
+  guides(col=guide_legend(override.aes=list(size=2))) +
+  scale_size(limits=c(0,.03), range=c(1,4))
+resid_cooks
+```
+
+###############################################################################################
+#                                      Robust regression                                               #
+###############################################################################################
+## Due to the abnormal pattern in residuals and high proportion of influence points, I tried several methods below. However, none of them can completely solved the problems. You can still try some other methods. If you have opinions, please let me know. 
+
+## Robust regression: M-estimation
+# Huber loss
+```{r}
+library('sfsmisc')
+robust_regression_huber<-rlm(Cesdtot4 ~ Marstat_2 + Marstat_3 + Marstat_4 + Health4_2 + Health4_3 + Health4_4 + 
+    Totiadl4_2 + Totiadl4_3 + USborn + Grade +  Age + Mdiab41 + OO49lang + 
+    Sex + Totadl4 + Totmmse4 + EE46 + U43s*Totiadl4_3, df_knn_cat)
+
+F_statistics<-c()
+p_value<-c()
+
+feature<-rownames(data.frame(robust_regression_huber$coefficients))
+
+for(i in 1:length(feature)){
+  ftest<-f.robftest(robust_regression_huber,var=feature[i])
+  F_statistics<-c(F_statistics,ftest$statistic)
+  p_value<-c(p_value,ftest$p.value)
+}
+
+significant<-p_value
+significant[p_value<=0.001] = '***'
+significant[p_value<=0.01 & p_value>0.001] = '**'
+significant[p_value<=0.05 & p_value>0.01] = '*'
+significant[p_value<=0.1 & p_value>0.05] = '.'
+significant[p_value<=1 & p_value>0.1] = ' '
+
+robust_result<-data.frame(Robust_Estimation = robust_regression_huber$coefficients)
+robust_result<-cbind(robust_result,F_statistics,p_value,significant)
+robust_result
+```
+
+
+
+
+###############################################################################################
+#                           Zongrui Dai - Robust regression                                   #
+###############################################################################################
+## Comparing the result from robust regression, least square(Remove the outliers), robust standard error
+# EE46 is insignificant in both OLS and Robust regression - No linear relationship
+# Totiadl4_3 and Totiadl4_2 are significant(High activity indicate lower depression?)
+# Totiadl4_3 and U43s interaction is strong (High activity reduce or relate to U43s?)
+
+```{r}
+robust_result # Robust - huber loss
+summary(l4) # OLS
+#coeftest(l4, vcov = vcovHC(l4, "HC1")) ## Robust SE
+```
+
+#######
+# Summary Statistics
+#######
+
+```{r}
+library(forcats)
+data2 <- data %>% 
+  select('GRADE', 'USBORN', 'AGE4', 'MARSTAT4', 'HEALTH4', 'KHYPER41', 'MDIAB41', 'U43S', 'TOTMMSE4', 'CESDTOT4', 'TOTIADL4', 'TOTADL4', 'EE46', 'OO49LANG', 'MALE') %>% 
+  mutate(MARSTAT4 = as.factor(MARSTAT4), HEALTH4 = as.factor(HEALTH4), TOTIADL4 = as.factor(TOTIADL4), EE46 = as.factor(EE46), USBORN=as.factor(USBORN), OO49LANG = as.factor(OO49LANG), U43S=as.factor(U43S), KHYPER41=as.factor(KHYPER41), MALE = as.factor(MALE), MDIAB41=as.factor(MDIAB41)) 
+
+data2$TOTIADL4 <- fct_collapse(data2$TOTIADL4, 
+               'Able to do most activities'=c('0', '1', '2'),
+               'Able to do some activities'=c('3', '4', '5', '6'),
+               'Unable to do most activities'=c('7', '8', '9', '10'))
+data2$EE46 <- fct_collapse(data2$EE46,
+               'Highly religious'=c('1', '2'),
+               'Not very religious'=c('3', '4'))
+
+colSums(is.na(data2)) # n missing
+
+data2 %>% select(GRADE, TOTMMSE4, AGE4, TOTADL4, CESDTOT4) %>% summarise_all(c(mean=funs(mean(.,na.rm=T)), sd=funs(sd(., na.rm=T))))
+
+summary(data2)
+
+colnames(df_knn_cat)
+df_knn_cat %>% count(Marstat_2, Marstat_3, Marstat_4, Marstat_5)
+df_knn_cat %>% count(Health4_2, Health4_3, Health4_4)
+df_knn_cat %>% count(Totiadl4_2, Totiadl4_3)
+df_knn_cat %>% count(USborn)
+df_knn_cat %>% count(Khyper41)
+df_knn_cat %>% count(Mdiab41)
+df_knn_cat %>% count(OO49lang)
+df_knn_cat %>% count(Sex)
+df_knn_cat %>% count(U43s)
+df_knn_cat %>% count(EE46)
+
+df_knn_cat %>% select(Grade, Totmmse4, Age, Totadl4, Cesdtot4) %>% summarise_all(c(mean=funs(mean(.,na.rm=T)), sd=funs(sd(., na.rm=T))))
+```

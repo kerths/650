@@ -1,0 +1,416 @@
+---
+title: "Group project"
+author: "Zongrui Dai"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+## Input the data and do imputation
+# Data input
+```{r}
+library(xlsx)
+library(ggplot2)
+library(ggstatsplot)
+library(nnet)
+library(MASS)
+library(lmtest)
+setwd('D:/BIOSTAT 650/Group project/')
+```
+
+```{r}
+data<-read.xlsx('Depression Data.xls',header=T,sheetName = 'dep')
+str(data)
+```
+
+## Remove the unwanted features
+```{r}
+df<-data.frame(
+  Grade = data$GRADE,
+  USborn = data$USBORN,
+  Age = data$AGE4,
+  Marstat = data$MARSTAT4,
+  Khyper41 = data$KHYPER41,
+  Mdiab41 = data$MDIAB41,
+  Totmmse4 = data$TOTMMSE4,
+  Cesdtot4 = data$CESDTOT4,
+  Totiadl4 = data$TOTIADL4,
+  EE46 = data$EE46,
+  OO49lang = data$OO49LANG,
+  Sex = data$MALE,
+  U43s = data$U43S,
+  Totadl4 = data$TOTADL4
+)
+summary(df)
+
+```
+###############################################################################################
+#                                   Imputation                                                #
+###############################################################################################
+## Review the pattern of missing value
+# First figure indicate which type of sample are likely to be missed
+# Second figure indicate that Cesdtot4,Totmmse4, and EE46 have higher propotion of missing value. While EE46 and Cesdtot4 are our interested variables. So I don't remove all of them (Include the Totmmse4, if you think it can be removed, please let me know.). 
+```{r}
+library(mice)
+miss.nu<-mice(df, maxit=0)
+md.pattern(df,rotate.names=TRUE) 
+fluxplot(df)
+
+#impt<-mice(data,maxit=30, seed=20221113,print = FALSE)
+#stripplot(impt, CESDTOT4~.imp, pch=8, cex=2)
+#plot(impt)
+```
+
+## KNN imputation. Define k as 1 which can prevent the producing of unresonable values
+```{r}
+library(DMwR2)
+df_knn<-knnImputation(df,k=1)
+## Define the centralized response variable
+df_knn$Cesdtot4_Centralize<-df_knn$Cesdtot4-mean(df_knn$Cesdtot4)
+## Define the centralized and scaled response variable
+df_knn$Cesdtot4_Centralize_Scale<-(df_knn$Cesdtot4-mean(df_knn$Cesdtot4))/sd(df_knn$Cesdtot4)
+
+summary(df_knn)
+```
+###############################################################################################
+#                           Muticollinearity of Totadl4                                       #
+###############################################################################################
+## Whether the Totadl4 should be discarded
+# The VIF value of this feature indicate a weak muticollinearity. So we cannot remove it 
+```{r}
+## Based on the KNN imputation method
+# VIF shows there is no need to discard Totadl4(VIF<5)
+
+l1<-lm(Cesdtot4~.,df_knn[,c(-15,-16)]) ## Must remove Cesdtot4_Centralize and Cesdtot4_Centralize_Scale when fitting
+
+car::vif(l1)
+#write.csv(df_knn,'D:/BIOSTAT 650/Group project/Cleaned data.csv')
+```
+
+###############################################################################################
+#           Whether the grouping of Totadl4 and Totiadl4 can be further simplified            #
+###############################################################################################
+
+## Whether the Totiadl4 can be simplified to three groups - (0,1,2), (3,4,5,6), (7,8,9,10)
+```{r}
+ggbetweenstats(
+    data = df_knn,
+    x = Totiadl4,
+    y = Cesdtot4,
+    type = "robust",
+    pairwise.comparisons = F,
+    outlier.tagging = TRUE
+)
+```
+
+## Whether the Totadl4 can be simplified to two groups - 0, (1,7)
+```{r}
+ggbetweenstats(
+    data = df_knn,
+    x = Totadl4,
+    y = Cesdtot4,
+    type = "robust",
+    pairwise.comparisons = F,
+    outlier.tagging = TRUE
+)
+```
+
+## GLH hypothesis of Totiadl4
+```{r}
+T0<-as.numeric(df_knn$Totiadl4==0)
+T1<-as.numeric(df_knn$Totiadl4==1)
+T2<-as.numeric(df_knn$Totiadl4==2)
+T3<-as.numeric(df_knn$Totiadl4==3)
+T4<-as.numeric(df_knn$Totiadl4==4)
+T5<-as.numeric(df_knn$Totiadl4==5)
+T6<-as.numeric(df_knn$Totiadl4==6)
+T7<-as.numeric(df_knn$Totiadl4==7)
+T8<-as.numeric(df_knn$Totiadl4==8)
+T9<-as.numeric(df_knn$Totiadl4==9)
+T10<-as.numeric(df_knn$Totiadl4==10)
+
+## Taking T0 as reference coding
+df1<-cbind(df_knn,T1,T2,T3,T4,
+           T5,T6,T7,T8,T9,T10)
+df2<-df1[,c(8,17:26)]
+l2<-lm(Cesdtot4 ~.,df2)
+summary(l2)
+```
+
+## Totiadl4 should only be combined to three groups
+# p=6.73e-07 ***
+```{r}
+TM<-c(rep(0,1),1,rep(0,9),rep(0,1),1,-1,rep(0,8),rep(0,3),1,-1,rep(0,6),rep(0,4),1,-1,rep(0,5),rep(0,5),1,-1,rep(0,4),rep(0,7),1,-1,rep(0,2),rep(0,8),1,-1,rep(0,1),rep(0,9),1,-1)
+tm<-matrix(TM,byrow = T,ncol=11)
+print(tm)
+
+car::linearHypothesis(model=l2,hypothesis.matrix=tm,rhs=rep(0,8))
+```
+
+## GLH hypothesis of Totadl4
+```{r}
+T0<-as.numeric(df_knn$Totadl4==0)
+T1<-as.numeric(df_knn$Totadl4==1)
+T2<-as.numeric(df_knn$Totadl4==2)
+T3<-as.numeric(df_knn$Totadl4==3)
+T4<-as.numeric(df_knn$Totadl4==4)
+T5<-as.numeric(df_knn$Totadl4==5)
+T6<-as.numeric(df_knn$Totadl4==6)
+T7<-as.numeric(df_knn$Totadl4==7)
+
+
+## Taking T0 as reference coding
+df1<-cbind(df_knn,T1,T2,T3,T4,
+           T5,T6,T7)
+df2<-df1[,c(8,17:23)]
+l2<-lm(Cesdtot4 ~.,df2)
+summary(l2)
+```
+
+## Totadl4 cannot be further simplified 
+# p=0.3509
+```{r}
+TM<-c(rep(0,1),1,-1,rep(0,5),rep(0,2),1,-1,rep(0,4),rep(0,3),1,-1,rep(0,3),rep(0,4),1,-1,rep(0,2),rep(0,5),1,-1,rep(0,1),rep(0,6),1,-1)
+tm<-matrix(TM,byrow = T,ncol=8)
+print(tm)
+
+car::linearHypothesis(model=l2,hypothesis.matrix=tm,rhs=rep(0,6))
+```
+
+###############################################################################################
+#              Whether the grouping of other variable can be further simplified               #
+###############################################################################################
+## Reglious
+```{r}
+ggbetweenstats(
+    data = df_knn,
+    x = EE46,
+    y = Cesdtot4_Centralize,
+    type = "robust",
+    pairwise.comparisons = F,
+    outlier.tagging = TRUE
+)
+```
+
+## Whether the (1,4) and (2,3) can be combined
+```{r}
+R1<-as.numeric(df_knn$EE46==1)
+R2<-as.numeric(df_knn$EE46==2)
+R3<-as.numeric(df_knn$EE46==3)
+R4<-as.numeric(df_knn$EE46==4)
+
+Cesdtot4_Centralize=df_knn$Cesdtot4_Centralize
+df3<-cbind(Cesdtot4_Centralize,R2,R3,R4)
+df3<-as.data.frame(df3)
+l3<-lm(Cesdtot4_Centralize ~.,df3)
+summary(l3)
+```
+
+## Reglious cannot be combined to two groups
+# p=0.2389
+```{r}
+TM1<-c(rep(0,1),1,-1,0,rep(0,3),1)
+tm1<-matrix(TM1,byrow = T,ncol=4)
+
+car::linearHypothesis(model=l3,hypothesis.matrix=tm1,rhs=rep(0,2))
+```
+
+###############################################################################################
+#                           Continuous vs categorical                                         #
+###############################################################################################
+
+## Before analysis, change Totiadl4 to three groups (0,1,2), (3,4,5,6), (7,8,9,10)
+```{r}
+## After this transfermation, it will be hard to say whether the variable is equal space. 
+# So here I using reference coding to categorize the Totiadl4, using 1 as reference. 
+Totiadl4<-df_knn$Totiadl4
+Totiadl4[Totiadl4>=0 & Totiadl4<=2] = 1
+Totiadl4[Totiadl4>=3 & Totiadl4<=6] = 2
+Totiadl4[Totiadl4>=7 & Totiadl4<=10] = 3
+
+df_knn$Totiadl4<-Totiadl4
+dummyTotiadl4 <- class.ind(Totiadl4)
+
+df_knn<-df_knn[,-9]  # remove the original Totiadl4
+df_knn<-cbind(dummyTotiadl4[,2:3],df_knn)
+colnames(df_knn)[1:2]<-c('Totiadl4_2','Totiadl4_3')
+```
+
+## Binary variable has no need to be dummy. Here I define the variable which has 3 - 5classes as muticlass. For this kinds of variables, we can use categorical methods. Other variable with more than 5 classes are defined as continuous. 
+```{r}
+type<-c()
+for(i in 1:length(df_knn)){
+  feature<-df_knn[,i]
+  freq<-data.frame(table(feature))
+  if(length(freq[,1]) == 2){
+    type<-c(type,'binary')
+  }else if(length(freq[,1]) >=3 & length(freq[,1])<=5){
+    type<-c(type,'muticlass(3-5)')
+  }else if(length(freq[,1]) > 5){
+    type<-c(type,'continuous(>5)')
+  }
+}
+data_type<-data.frame(type,colnames(df_knn))
+print(data_type)
+```
+
+## Define the EE46 and Marstat as dummy variable. Both are taking group1 as reference group
+```{r}
+## Only EE46 and Marstat are defined as muticlasses variables
+dummyEE46 <- class.ind(df_knn$EE46)
+dummyMarstat <- class.ind(df_knn$Marstat)
+
+df_knn<-df_knn[,c(-6,-11)]  # remove the original Totiadl4
+df_knn<-cbind(dummyEE46[,2:4],dummyMarstat[,2:5],df_knn)
+colnames(df_knn)[1:7]<-c('EE46_2','EE46_3','EE46_4',
+                         'Marstat_2','Marstat_3','Marstat_4','Marstat_5')
+```
+
+###############################################################################################
+#                            Covariate selection                                              #
+###############################################################################################
+## Stepwise selection (or sequential replacement), which is a combination of forward and backward selections. You start with no predictors, then sequentially add the most contributive predictors (like forward selection). After adding each new variable, remove any variables that no longer provide an improvement in the model fit (like backward selection).
+
+```{r}
+# Fit the full model 
+full.model <- lm(Cesdtot4 ~., data = df_knn[,c(-21,-22)]) ## Using Cesdtot4 as response, if you want to take centralized as y, you can change the slice and alter the formula. 
+
+
+# Stepwise regression model
+step.model <- stepAIC(full.model, direction = "both", 
+                      trace = FALSE)
+summary(step.model)
+```
+
+## Remove the feature and obtain the new dataset named Reduced_df_knn
+```{r}
+Reduced_df_knn<-df_knn[,c('EE46_2','EE46_3','EE46_4' ,'Marstat_2',
+    'Marstat_3','Totiadl4_2','Totiadl4_3','USborn','Khyper41',
+    'Totmmse4','OO49lang','Sex','U43s','Totadl4','Cesdtot4','Cesdtot4_Centralize_Scale','Cesdtot4_Centralize')]
+```
+
+###############################################################################################
+#                                    Interaction                                              #
+###############################################################################################
+## U43s has interaction with Khyper41? 
+# The interaction U43s:Khyper41 is not significant
+```{r}
+## Taken Cesdtot4 as response
+l3<-lm(Cesdtot4 ~ EE46_2 + EE46_3 + EE46_4 + Marstat_2 + 
+    Marstat_3 + Totiadl4_2 + Totiadl4_3 + USborn+ 
+    Totmmse4 + OO49lang + Sex + Totadl4 + U43s*Khyper41,Reduced_df_knn[,c(-16,-17)])
+summary(l3)
+```
+
+# The interaction U43s:Khyper41 is not significant
+```{r}
+## Taken Cesdtot4 as response
+l3<-lm(Cesdtot4 ~ EE46_2 + EE46_3 + EE46_4 + Marstat_2 + 
+    Marstat_3 + Totiadl4_2 + Totiadl4_3 + USborn+ 
+    Totmmse4 + OO49lang + Sex + Totadl4 + U43s*Khyper41,Reduced_df_knn[,c(-16,-17)])
+summary(l3)
+```
+
+## Although the interaction is not significant. We still can test whether there is one mediation relationship between them. 
+# p=2.113565e-06, may have a strong mediation. 
+```{r}
+## My result indicate that U43s may have one directed effect on Cesdtot4. While Khyper41 may be the mediation. 
+library(multilevel)
+sobel(pred=Reduced_df_knn$U43s, med=Reduced_df_knn$Khyper41, out=Reduced_df_knn$Cesdtot4)
+print(2-2*pnorm(4.742251)) ## sobel test only give out the z value, so here I just compute p-value by hand
+
+#sobel(pred=Reduced_df_knn$Khyper41, med=Reduced_df_knn$U43s, out=Reduced_df_knn$Cesdtot4)
+```
+
+###############################################################################################
+#                                   Diagnostics                                               #
+###############################################################################################
+```{r}
+l4<-lm(Cesdtot4 ~ EE46_2 + EE46_3 + EE46_4 + Marstat_2 + 
+    Marstat_3 + Totiadl4_2 + Totiadl4_3 + USborn+ 
+    Totmmse4 + OO49lang + Sex + Totadl4 + U43s + Khyper41,Reduced_df_knn[,c(-16,-17)])
+summary(l4)
+
+par(mfrow=c(2,2))
+plot(l4)
+```
+
+## Although the normality test is violated, the residual's distribution is skewed and has only one peak. In my experience, this situation is doesn't matter. 
+```{r}
+## Normality test for the residuals
+shapiro.test(l4$residuals) # Normality is violated - p-value<0.001
+
+hist(l4$residuals) ## Skewed distribution but only one peak
+```
+
+## Durbin-Watson Test for autocorrelation - significant
+# The plot seems to have cluster pattern and the test is also significant
+```{r}
+plot(l4$res[-1682],l4$res[-1],xlab='residual_{i}',ylab='residual_{i-1}')
+dwtest(l4)
+```
+
+## Constant Variance Illustration
+# Strange pattern 
+```{r}
+plot(l4$fitted.values,l4$residuals,xlab='Fitted_value',ylab='Residuals')
+```
+
+## Due to the abnormal pattern in residuals, I tried several methods below. However, none of them can completely solved the problems. You can still try some other methods. If you have opinions, please let me know. 
+
+# Least trimmed squares (LTS), or least trimmed sum of squares, is a robust statistical method that fits a function to a set of data whilst not being unduly affected by the presence of outliers. It is one of a number of methods for robust regression. 
+
+# The result is terrible, autocorrelation and Unequal variance are still exist. 
+```{r}
+robust_regression<-ltsreg(Cesdtot4 ~ EE46_2 + EE46_3 + EE46_4 + Marstat_2 + 
+    Marstat_3 + Totiadl4_2 + Totiadl4_3 + USborn+ 
+    Totmmse4 + OO49lang + Sex + Totadl4 + U43s + Khyper41,Reduced_df_knn[,c(-16,-17)])
+
+plot(robust_regression$residuals[-1682],robust_regression$residuals[-1],xlab='residual_{i}',ylab='residual_{i-1}')
+plot(robust_regression$fitted.values,robust_regression$residuals,xlab='Fitted_y',ylab='residual')
+```
+
+# Least trimmed squares (LTS), or least trimmed sum of squares, is a robust statistical method that fits a function to a set of data whilst not being unduly affected by the presence of outliers. It is one of a number of methods for robust regression. 
+```{r}
+robust_regression<-ltsreg(Cesdtot4 ~ EE46_2 + EE46_3 + EE46_4 + Marstat_2 + 
+    Marstat_3 + Totiadl4_2 + Totiadl4_3 + USborn+ 
+    Totmmse4 + OO49lang + Sex + Totadl4 + U43s + Khyper41,Reduced_df_knn[,c(-16,-17)])
+
+plot(robust_regression$residuals[-1682],robust_regression$residuals[-1],xlab='residual_{i}',ylab='residual_{i-1}')
+plot(robust_regression$fitted.values,robust_regression$residuals,xlab='Fitted_y',ylab='residual')
+```
+
+##Weighted Least Squares
+# This method is taught on class which may make more sense. While the result is still illed. 
+```{r}
+MSE<-6.95**2
+w = 1/(MSE*(1-hatvalues(l4)))
+
+l5<-lm(Cesdtot4 ~ EE46_2 + EE46_3 + EE46_4 + Marstat_2 + 
+    Marstat_3 + Totiadl4_2 + Totiadl4_3 + USborn+ 
+    Totmmse4 + OO49lang + Sex + Totadl4 + U43s + Khyper41,Reduced_df_knn[,c(-16,-17)],weights = w)
+summary(l5)
+
+plot(l5$residuals[-1682],l5$residuals[-1],xlab='residual_{i}',ylab='residual_{i-1}')
+plot(l5$fitted.values,l5$residuals,xlab='Fitted_y',ylab='residual')
+```
+
+
+###############################################################################################
+#                                   Residual's plot                                           #
+###############################################################################################
+
+## Combining with the color of Cesdtot4. It seems a clear pattern which may associate with the value of Cesdtot4. Maybe higher y will have higher residuals? Or whether linear regression is only suitable when Cesdtot4 is small? Maybe remove the Cesdtot4 larger than 30 will help?
+```{r}
+d<-data.frame(residuals=l4$residuals,fittedy = l4$fitted.values,y = Reduced_df_knn$Cesdtot4)
+ggplot(d,aes(residuals,fittedy,col=factor(y)))+geom_point()
+```
+
+
+
+
+
+
+
+
+
+
