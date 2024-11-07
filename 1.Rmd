@@ -1,6 +1,5 @@
 ---
 title: "Group project"
-author: "Zongrui Dai"
 date: "`r Sys.Date()`"
 output:
   html_document: default
